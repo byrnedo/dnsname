@@ -55,8 +55,6 @@ const (
 	VF_LINK_STATE_DISABLE uint32 = 2
 )
 
-var lookupByDump = false
-
 var macvlanModes = [...]uint32{
 	0,
 	nl.MACVLAN_MODE_PRIVATE,
@@ -347,6 +345,16 @@ func (h *Handle) BridgeSetVlanFiltering(link Link, on bool) error {
 	return h.linkModify(bridge, unix.NLM_F_ACK)
 }
 
+func BridgeSetVlanDefaultPVID(link Link, pvid uint16) error {
+	return pkgHandle.BridgeSetVlanDefaultPVID(link, pvid)
+}
+
+func (h *Handle) BridgeSetVlanDefaultPVID(link Link, pvid uint16) error {
+	bridge := link.(*Bridge)
+	bridge.VlanDefaultPVID = &pvid
+	return h.linkModify(bridge, unix.NLM_F_ACK)
+}
+
 func SetPromiscOn(link Link) error {
 	return pkgHandle.SetPromiscOn(link)
 }
@@ -591,13 +599,50 @@ func (h *Handle) LinkSetVfVlanQos(link Link, vf, vlan, qos int) error {
 	req.AddData(msg)
 
 	data := nl.NewRtAttr(unix.IFLA_VFINFO_LIST, nil)
-	info := nl.NewRtAttrChild(data, nl.IFLA_VF_INFO, nil)
+	info := data.AddRtAttr(nl.IFLA_VF_INFO, nil)
 	vfmsg := nl.VfVlan{
 		Vf:   uint32(vf),
 		Vlan: uint32(vlan),
 		Qos:  uint32(qos),
 	}
-	nl.NewRtAttrChild(info, nl.IFLA_VF_VLAN, vfmsg.Serialize())
+	info.AddRtAttr(nl.IFLA_VF_VLAN, vfmsg.Serialize())
+	req.AddData(data)
+
+	_, err := req.Execute(unix.NETLINK_ROUTE, 0)
+	return err
+}
+
+// LinkSetVfVlanQosProto sets the vlan, qos and protocol of a vf for the link.
+// Equivalent to: `ip link set $link vf $vf vlan $vlan qos $qos proto $proto`
+func LinkSetVfVlanQosProto(link Link, vf, vlan, qos, proto int) error {
+	return pkgHandle.LinkSetVfVlanQosProto(link, vf, vlan, qos, proto)
+}
+
+// LinkSetVfVlanQosProto sets the vlan, qos and protocol of a vf for the link.
+// Equivalent to: `ip link set $link vf $vf vlan $vlan qos $qos proto $proto`
+func (h *Handle) LinkSetVfVlanQosProto(link Link, vf, vlan, qos, proto int) error {
+	base := link.Attrs()
+	h.ensureIndex(base)
+	req := h.newNetlinkRequest(unix.RTM_SETLINK, unix.NLM_F_ACK)
+
+	msg := nl.NewIfInfomsg(unix.AF_UNSPEC)
+	msg.Index = int32(base.Index)
+	req.AddData(msg)
+
+	data := nl.NewRtAttr(unix.IFLA_VFINFO_LIST, nil)
+	vfInfo := data.AddRtAttr(nl.IFLA_VF_INFO, nil)
+	vfVlanList := vfInfo.AddRtAttr(nl.IFLA_VF_VLAN_LIST, nil)
+
+	vfmsg := nl.VfVlanInfo{
+		VfVlan: nl.VfVlan{
+			Vf:   uint32(vf),
+			Vlan: uint32(vlan),
+			Qos:  uint32(qos),
+		},
+		VlanProto: (uint16(proto)>>8)&0xFF | (uint16(proto)&0xFF)<<8,
+	}
+
+	vfVlanList.AddRtAttr(nl.IFLA_VF_VLAN_INFO, vfmsg.Serialize())
 	req.AddData(data)
 
 	_, err := req.Execute(unix.NETLINK_ROUTE, 0)
@@ -948,6 +993,141 @@ func LinkSetXdpFdWithFlags(link Link, fd, flags int) error {
 	return err
 }
 
+// LinkSetGSOMaxSegs sets the GSO maximum segment count of the link device.
+// Equivalent to: `ip link set $link gso_max_segs $maxSegs`
+func LinkSetGSOMaxSegs(link Link, maxSegs int) error {
+       return pkgHandle.LinkSetGSOMaxSegs(link, maxSegs)
+}
+
+// LinkSetGSOMaxSegs sets the GSO maximum segment count of the link device.
+// Equivalent to: `ip link set $link gso_max_segs $maxSegs`
+func (h *Handle) LinkSetGSOMaxSegs(link Link, maxSize int) error {
+       base := link.Attrs()
+       h.ensureIndex(base)
+       req := h.newNetlinkRequest(unix.RTM_SETLINK, unix.NLM_F_ACK)
+
+       msg := nl.NewIfInfomsg(unix.AF_UNSPEC)
+       msg.Index = int32(base.Index)
+       req.AddData(msg)
+
+       b := make([]byte, 4)
+       native.PutUint32(b, uint32(maxSize))
+
+       data := nl.NewRtAttr(unix.IFLA_GSO_MAX_SEGS, b)
+       req.AddData(data)
+
+       _, err := req.Execute(unix.NETLINK_ROUTE, 0)
+       return err
+}
+
+// LinkSetGSOMaxSize sets the IPv6 GSO maximum size of the link device.
+// Equivalent to: `ip link set $link gso_max_size $maxSize`
+func LinkSetGSOMaxSize(link Link, maxSize int) error {
+	return pkgHandle.LinkSetGSOMaxSize(link, maxSize)
+}
+
+// LinkSetGSOMaxSize sets the IPv6 GSO maximum size of the link device.
+// Equivalent to: `ip link set $link gso_max_size $maxSize`
+func (h *Handle) LinkSetGSOMaxSize(link Link, maxSize int) error {
+	base := link.Attrs()
+	h.ensureIndex(base)
+	req := h.newNetlinkRequest(unix.RTM_SETLINK, unix.NLM_F_ACK)
+
+	msg := nl.NewIfInfomsg(unix.AF_UNSPEC)
+	msg.Index = int32(base.Index)
+	req.AddData(msg)
+
+	b := make([]byte, 4)
+	native.PutUint32(b, uint32(maxSize))
+
+	data := nl.NewRtAttr(unix.IFLA_GSO_MAX_SIZE, b)
+	req.AddData(data)
+
+	_, err := req.Execute(unix.NETLINK_ROUTE, 0)
+	return err
+}
+
+// LinkSetGROMaxSize sets the IPv6 GRO maximum size of the link device.
+// Equivalent to: `ip link set $link gro_max_size $maxSize`
+func LinkSetGROMaxSize(link Link, maxSize int) error {
+	return pkgHandle.LinkSetGROMaxSize(link, maxSize)
+}
+
+// LinkSetGROMaxSize sets the IPv6 GRO maximum size of the link device.
+// Equivalent to: `ip link set $link gro_max_size $maxSize`
+func (h *Handle) LinkSetGROMaxSize(link Link, maxSize int) error {
+	base := link.Attrs()
+	h.ensureIndex(base)
+	req := h.newNetlinkRequest(unix.RTM_SETLINK, unix.NLM_F_ACK)
+
+	msg := nl.NewIfInfomsg(unix.AF_UNSPEC)
+	msg.Index = int32(base.Index)
+	req.AddData(msg)
+
+	b := make([]byte, 4)
+	native.PutUint32(b, uint32(maxSize))
+
+	data := nl.NewRtAttr(unix.IFLA_GRO_MAX_SIZE, b)
+	req.AddData(data)
+
+	_, err := req.Execute(unix.NETLINK_ROUTE, 0)
+	return err
+}
+
+// LinkSetGSOIPv4MaxSize sets the IPv4 GSO maximum size of the link device.
+// Equivalent to: `ip link set $link gso_ipv4_max_size $maxSize`
+func LinkSetGSOIPv4MaxSize(link Link, maxSize int) error {
+	return pkgHandle.LinkSetGSOIPv4MaxSize(link, maxSize)
+}
+
+// LinkSetGSOIPv4MaxSize sets the IPv4 GSO maximum size of the link device.
+// Equivalent to: `ip link set $link gso_ipv4_max_size $maxSize`
+func (h *Handle) LinkSetGSOIPv4MaxSize(link Link, maxSize int) error {
+	base := link.Attrs()
+	h.ensureIndex(base)
+	req := h.newNetlinkRequest(unix.RTM_SETLINK, unix.NLM_F_ACK)
+
+	msg := nl.NewIfInfomsg(unix.AF_UNSPEC)
+	msg.Index = int32(base.Index)
+	req.AddData(msg)
+
+	b := make([]byte, 4)
+	native.PutUint32(b, uint32(maxSize))
+
+	data := nl.NewRtAttr(unix.IFLA_GSO_IPV4_MAX_SIZE, b)
+	req.AddData(data)
+
+	_, err := req.Execute(unix.NETLINK_ROUTE, 0)
+	return err
+}
+
+// LinkSetGROIPv4MaxSize sets the IPv4 GRO maximum size of the link device.
+// Equivalent to: `ip link set $link gro_ipv4_max_size $maxSize`
+func LinkSetGROIPv4MaxSize(link Link, maxSize int) error {
+	return pkgHandle.LinkSetGROIPv4MaxSize(link, maxSize)
+}
+
+// LinkSetGROIPv4MaxSize sets the IPv4 GRO maximum size of the link device.
+// Equivalent to: `ip link set $link gro_ipv4_max_size $maxSize`
+func (h *Handle) LinkSetGROIPv4MaxSize(link Link, maxSize int) error {
+	base := link.Attrs()
+	h.ensureIndex(base)
+	req := h.newNetlinkRequest(unix.RTM_SETLINK, unix.NLM_F_ACK)
+
+	msg := nl.NewIfInfomsg(unix.AF_UNSPEC)
+	msg.Index = int32(base.Index)
+	req.AddData(msg)
+
+	b := make([]byte, 4)
+	native.PutUint32(b, uint32(maxSize))
+
+	data := nl.NewRtAttr(unix.IFLA_GRO_IPV4_MAX_SIZE, b)
+	req.AddData(data)
+
+	_, err := req.Execute(unix.NETLINK_ROUTE, 0)
+	return err
+}
+
 func boolAttr(val bool) []byte {
 	var v uint8
 	if val {
@@ -1148,6 +1328,10 @@ func (h *Handle) LinkAdd(link Link) error {
 	return h.linkModify(link, unix.NLM_F_CREATE|unix.NLM_F_EXCL|unix.NLM_F_ACK)
 }
 
+func LinkModify(link Link) error {
+	return pkgHandle.LinkModify(link)
+}
+
 func (h *Handle) LinkModify(link Link) error {
 	return h.linkModify(link, unix.NLM_F_REQUEST|unix.NLM_F_ACK)
 }
@@ -1262,9 +1446,26 @@ func (h *Handle) linkModify(link Link, flags int) error {
 
 		}
 
+		control := func(file *os.File, f func(fd uintptr)) error {
+			name := file.Name()
+			conn, err := file.SyscallConn()
+			if err != nil {
+				return fmt.Errorf("SyscallConn() failed on %s: %v", name, err)
+			}
+			if err := conn.Control(f); err != nil {
+				return fmt.Errorf("Failed to get file descriptor for %s: %v", name, err)
+			}
+			return nil
+		}
+
 		// only persist interface if NonPersist is NOT set
 		if !tuntap.NonPersist {
-			_, _, errno := unix.Syscall(unix.SYS_IOCTL, fds[0].Fd(), uintptr(unix.TUNSETPERSIST), 1)
+			var errno syscall.Errno
+			if err := control(fds[0], func(fd uintptr) {
+				_, _, errno = unix.Syscall(unix.SYS_IOCTL, fd, uintptr(unix.TUNSETPERSIST), 1)
+			}); err != nil {
+				return err
+			}
 			if errno != 0 {
 				cleanupFds(fds)
 				return fmt.Errorf("Tuntap IOCTL TUNSETPERSIST failed, errno %v", errno)
@@ -1281,7 +1482,10 @@ func (h *Handle) linkModify(link Link, flags int) error {
 				// un-persist (e.g. allow the interface to be removed) the tuntap
 				// should not hurt if not set prior, condition might be not needed
 				if !tuntap.NonPersist {
-					_, _, _ = unix.Syscall(unix.SYS_IOCTL, fds[0].Fd(), uintptr(unix.TUNSETPERSIST), 0)
+					// ignore error
+					_ = control(fds[0], func(fd uintptr) {
+						_, _, _ = unix.Syscall(unix.SYS_IOCTL, fd, uintptr(unix.TUNSETPERSIST), 0)
+					})
 				}
 				cleanupFds(fds)
 				return err
@@ -1377,6 +1581,21 @@ func (h *Handle) linkModify(link Link, flags int) error {
 	if base.GSOMaxSize > 0 {
 		gsoAttr := nl.NewRtAttr(unix.IFLA_GSO_MAX_SIZE, nl.Uint32Attr(base.GSOMaxSize))
 		req.AddData(gsoAttr)
+	}
+
+	if base.GROMaxSize > 0 {
+		groAttr := nl.NewRtAttr(unix.IFLA_GRO_MAX_SIZE, nl.Uint32Attr(base.GROMaxSize))
+		req.AddData(groAttr)
+	}
+
+	if base.GSOIPv4MaxSize > 0 {
+		gsoAttr := nl.NewRtAttr(unix.IFLA_GSO_IPV4_MAX_SIZE, nl.Uint32Attr(base.GSOIPv4MaxSize))
+		req.AddData(gsoAttr)
+	}
+
+	if base.GROIPv4MaxSize > 0 {
+		groAttr := nl.NewRtAttr(unix.IFLA_GRO_IPV4_MAX_SIZE, nl.Uint32Attr(base.GROIPv4MaxSize))
+		req.AddData(groAttr)
 	}
 
 	if base.Group > 0 {
@@ -1491,6 +1710,8 @@ func (h *Handle) linkModify(link Link, flags int) error {
 		addXfrmiAttrs(link, linkInfo)
 	case *IPoIB:
 		addIPoIBAttrs(link, linkInfo)
+	case *BareUDP:
+		addBareUDPAttrs(link, linkInfo)
 	}
 
 	req.AddData(linkInfo)
@@ -1687,6 +1908,7 @@ func LinkDeserialize(hdr *unix.NlMsghdr, m []byte) (Link, error) {
 	base.RawFlags = msg.Flags
 	base.Flags = linkFlags(msg.Flags)
 	base.EncapType = msg.EncapType()
+	base.NetNsID = -1
 	if msg.Flags&unix.IFF_PROMISC != 0 {
 		base.Promisc = 1
 	}
@@ -1771,6 +1993,8 @@ func LinkDeserialize(hdr *unix.NlMsghdr, m []byte) (Link, error) {
 						link = &IPoIB{}
 					case "can":
 						link = &Can{}
+					case "bareudp":
+						link = &BareUDP{}
 					default:
 						link = &GenericLink{LinkType: linkType}
 					}
@@ -1826,7 +2050,10 @@ func LinkDeserialize(hdr *unix.NlMsghdr, m []byte) (Link, error) {
 						parseIPoIBData(link, data)
 					case "can":
 						parseCanData(link, data)
+					case "bareudp":
+						parseBareUDPData(link, data)
 					}
+
 				case nl.IFLA_INFO_SLAVE_KIND:
 					slaveType = string(info.Value[:len(info.Value)-1])
 					switch slaveType {
@@ -1907,10 +2134,20 @@ func LinkDeserialize(hdr *unix.NlMsghdr, m []byte) (Link, error) {
 			base.PhysSwitchID = int(native.Uint32(attr.Value[0:4]))
 		case unix.IFLA_LINK_NETNSID:
 			base.NetNsID = int(native.Uint32(attr.Value[0:4]))
-		case unix.IFLA_GSO_MAX_SIZE:
-			base.GSOMaxSize = native.Uint32(attr.Value[0:4])
+		case unix.IFLA_TSO_MAX_SEGS:
+			base.TSOMaxSegs = native.Uint32(attr.Value[0:4])
+		case unix.IFLA_TSO_MAX_SIZE:
+			base.TSOMaxSize = native.Uint32(attr.Value[0:4])
 		case unix.IFLA_GSO_MAX_SEGS:
 			base.GSOMaxSegs = native.Uint32(attr.Value[0:4])
+		case unix.IFLA_GSO_MAX_SIZE:
+			base.GSOMaxSize = native.Uint32(attr.Value[0:4])
+		case unix.IFLA_GRO_MAX_SIZE:
+			base.GROMaxSize = native.Uint32(attr.Value[0:4])
+		case unix.IFLA_GSO_IPV4_MAX_SIZE:
+			base.GSOIPv4MaxSize = native.Uint32(attr.Value[0:4])
+		case unix.IFLA_GRO_IPV4_MAX_SIZE:
+			base.GROIPv4MaxSize = native.Uint32(attr.Value[0:4])
 		case unix.IFLA_VFINFO_LIST:
 			data, err := nl.ParseRouteAttr(attr.Value)
 			if err != nil {
@@ -2039,21 +2276,24 @@ type LinkUpdate struct {
 // LinkSubscribe takes a chan down which notifications will be sent
 // when links change.  Close the 'done' chan to stop subscription.
 func LinkSubscribe(ch chan<- LinkUpdate, done <-chan struct{}) error {
-	return linkSubscribeAt(netns.None(), netns.None(), ch, done, nil, false)
+	return linkSubscribeAt(netns.None(), netns.None(), ch, done, nil, false, 0, nil, false)
 }
 
 // LinkSubscribeAt works like LinkSubscribe plus it allows the caller
 // to choose the network namespace in which to subscribe (ns).
 func LinkSubscribeAt(ns netns.NsHandle, ch chan<- LinkUpdate, done <-chan struct{}) error {
-	return linkSubscribeAt(ns, netns.None(), ch, done, nil, false)
+	return linkSubscribeAt(ns, netns.None(), ch, done, nil, false, 0, nil, false)
 }
 
 // LinkSubscribeOptions contains a set of options to use with
 // LinkSubscribeWithOptions.
 type LinkSubscribeOptions struct {
-	Namespace     *netns.NsHandle
-	ErrorCallback func(error)
-	ListExisting  bool
+	Namespace              *netns.NsHandle
+	ErrorCallback          func(error)
+	ListExisting           bool
+	ReceiveBufferSize      int
+	ReceiveBufferForceSize bool
+	ReceiveTimeout         *unix.Timeval
 }
 
 // LinkSubscribeWithOptions work like LinkSubscribe but enable to
@@ -2064,13 +2304,26 @@ func LinkSubscribeWithOptions(ch chan<- LinkUpdate, done <-chan struct{}, option
 		none := netns.None()
 		options.Namespace = &none
 	}
-	return linkSubscribeAt(*options.Namespace, netns.None(), ch, done, options.ErrorCallback, options.ListExisting)
+	return linkSubscribeAt(*options.Namespace, netns.None(), ch, done, options.ErrorCallback, options.ListExisting,
+		options.ReceiveBufferSize, options.ReceiveTimeout, options.ReceiveBufferForceSize)
 }
 
-func linkSubscribeAt(newNs, curNs netns.NsHandle, ch chan<- LinkUpdate, done <-chan struct{}, cberr func(error), listExisting bool) error {
+func linkSubscribeAt(newNs, curNs netns.NsHandle, ch chan<- LinkUpdate, done <-chan struct{}, cberr func(error), listExisting bool,
+	rcvbuf int, rcvTimeout *unix.Timeval, rcvbufForce bool) error {
 	s, err := nl.SubscribeAt(newNs, curNs, unix.NETLINK_ROUTE, unix.RTNLGRP_LINK)
 	if err != nil {
 		return err
+	}
+	if rcvTimeout != nil {
+		if err := s.SetReceiveTimeout(rcvTimeout); err != nil {
+			return err
+		}
+	}
+	if rcvbuf != 0 {
+		err = s.SetReceiveBufferSize(rcvbuf, rcvbufForce)
+		if err != nil {
+			return err
+		}
 	}
 	if done != nil {
 		go func() {
@@ -2184,6 +2437,14 @@ func (h *Handle) LinkSetFlood(link Link, mode bool) error {
 	return h.setProtinfoAttr(link, mode, nl.IFLA_BRPORT_UNICAST_FLOOD)
 }
 
+func LinkSetIsolated(link Link, mode bool) error {
+	return pkgHandle.LinkSetIsolated(link, mode)
+}
+
+func (h *Handle) LinkSetIsolated(link Link, mode bool) error {
+	return h.setProtinfoAttr(link, mode, nl.IFLA_BRPORT_ISOLATED)
+}
+
 func LinkSetBrProxyArp(link Link, mode bool) error {
 	return pkgHandle.LinkSetBrProxyArp(link, mode)
 }
@@ -2198,6 +2459,14 @@ func LinkSetBrProxyArpWiFi(link Link, mode bool) error {
 
 func (h *Handle) LinkSetBrProxyArpWiFi(link Link, mode bool) error {
 	return h.setProtinfoAttr(link, mode, nl.IFLA_BRPORT_PROXYARP_WIFI)
+}
+
+func LinkSetBrNeighSuppress(link Link, mode bool) error {
+	return pkgHandle.LinkSetBrNeighSuppress(link, mode)
+}
+
+func (h *Handle) LinkSetBrNeighSuppress(link Link, mode bool) error {
+	return h.setProtinfoAttr(link, mode, nl.IFLA_BRPORT_NEIGH_SUPPRESS)
 }
 
 func (h *Handle) setProtinfoAttr(link Link, mode bool, attr int) error {
@@ -2570,9 +2839,8 @@ func addGeneveAttrs(geneve *Geneve, linkInfo *nl.RtAttr) {
 	data := linkInfo.AddRtAttr(nl.IFLA_INFO_DATA, nil)
 
 	if geneve.FlowBased {
-		// In flow based mode, no other attributes need to be configured
-		linkInfo.AddRtAttr(nl.IFLA_GENEVE_COLLECT_METADATA, boolAttr(geneve.FlowBased))
-		return
+		geneve.ID = 0
+		data.AddRtAttr(nl.IFLA_GENEVE_COLLECT_METADATA, []byte{})
 	}
 
 	if ip := geneve.Remote; ip != nil {
@@ -2614,6 +2882,8 @@ func parseGeneveData(link Link, data []syscall.NetlinkRouteAttr) {
 			geneve.Ttl = uint8(datum.Value[0])
 		case nl.IFLA_GENEVE_TOS:
 			geneve.Tos = uint8(datum.Value[0])
+		case nl.IFLA_GENEVE_COLLECT_METADATA:
+			geneve.FlowBased = true
 		}
 	}
 }
@@ -2623,7 +2893,7 @@ func addGretapAttrs(gretap *Gretap, linkInfo *nl.RtAttr) {
 
 	if gretap.FlowBased {
 		// In flow based mode, no other attributes need to be configured
-		data.AddRtAttr(nl.IFLA_GRE_COLLECT_METADATA, boolAttr(gretap.FlowBased))
+		data.AddRtAttr(nl.IFLA_GRE_COLLECT_METADATA, []byte{})
 		return
 	}
 
@@ -2706,6 +2976,12 @@ func parseGretapData(link Link, data []syscall.NetlinkRouteAttr) {
 func addGretunAttrs(gre *Gretun, linkInfo *nl.RtAttr) {
 	data := linkInfo.AddRtAttr(nl.IFLA_INFO_DATA, nil)
 
+	if gre.FlowBased {
+		// In flow based mode, no other attributes need to be configured
+		data.AddRtAttr(nl.IFLA_GRE_COLLECT_METADATA, []byte{})
+		return
+	}
+
 	if ip := gre.Local; ip != nil {
 		if ip.To4() != nil {
 			ip = ip.To4()
@@ -2776,6 +3052,8 @@ func parseGretunData(link Link, data []syscall.NetlinkRouteAttr) {
 			gre.EncapSport = ntohs(datum.Value[0:2])
 		case nl.IFLA_GRE_ENCAP_DPORT:
 			gre.EncapDport = ntohs(datum.Value[0:2])
+		case nl.IFLA_GRE_COLLECT_METADATA:
+			gre.FlowBased = true
 		}
 	}
 }
@@ -2816,13 +3094,13 @@ func parseLinkXdp(data []byte) (*LinkXdp, error) {
 }
 
 func addIptunAttrs(iptun *Iptun, linkInfo *nl.RtAttr) {
+	data := linkInfo.AddRtAttr(nl.IFLA_INFO_DATA, nil)
+
 	if iptun.FlowBased {
 		// In flow based mode, no other attributes need to be configured
-		linkInfo.AddRtAttr(nl.IFLA_IPTUN_COLLECT_METADATA, boolAttr(iptun.FlowBased))
+		data.AddRtAttr(nl.IFLA_IPTUN_COLLECT_METADATA, []byte{})
 		return
 	}
-
-	data := linkInfo.AddRtAttr(nl.IFLA_INFO_DATA, nil)
 
 	ip := iptun.Local.To4()
 	if ip != nil {
@@ -2844,15 +3122,12 @@ func addIptunAttrs(iptun *Iptun, linkInfo *nl.RtAttr) {
 	data.AddRtAttr(nl.IFLA_IPTUN_ENCAP_FLAGS, nl.Uint16Attr(iptun.EncapFlags))
 	data.AddRtAttr(nl.IFLA_IPTUN_ENCAP_SPORT, htons(iptun.EncapSport))
 	data.AddRtAttr(nl.IFLA_IPTUN_ENCAP_DPORT, htons(iptun.EncapDport))
+	data.AddRtAttr(nl.IFLA_IPTUN_PROTO, nl.Uint8Attr(iptun.Proto))
 }
 
 func parseIptunData(link Link, data []syscall.NetlinkRouteAttr) {
 	iptun := link.(*Iptun)
 	for _, datum := range data {
-		// NOTE: same with vxlan, ip tunnel may also has null datum.Value
-		if len(datum.Value) == 0 {
-			continue
-		}
 		switch datum.Attr.Type {
 		case nl.IFLA_IPTUN_LOCAL:
 			iptun.Local = net.IP(datum.Value[0:4])
@@ -2874,12 +3149,20 @@ func parseIptunData(link Link, data []syscall.NetlinkRouteAttr) {
 			iptun.EncapFlags = native.Uint16(datum.Value[0:2])
 		case nl.IFLA_IPTUN_COLLECT_METADATA:
 			iptun.FlowBased = true
+		case nl.IFLA_IPTUN_PROTO:
+			iptun.Proto = datum.Value[0]
 		}
 	}
 }
 
 func addIp6tnlAttrs(ip6tnl *Ip6tnl, linkInfo *nl.RtAttr) {
 	data := linkInfo.AddRtAttr(nl.IFLA_INFO_DATA, nil)
+
+	if ip6tnl.FlowBased {
+		// In flow based mode, no other attributes need to be configured
+		data.AddRtAttr(nl.IFLA_IPTUN_COLLECT_METADATA, []byte{})
+		return
+	}
 
 	if ip6tnl.Link != 0 {
 		data.AddRtAttr(nl.IFLA_IPTUN_LINK, nl.Uint32Attr(ip6tnl.Link))
@@ -2935,6 +3218,8 @@ func parseIp6tnlData(link Link, data []syscall.NetlinkRouteAttr) {
 			ip6tnl.EncapSport = ntohs(datum.Value[0:2])
 		case nl.IFLA_IPTUN_ENCAP_DPORT:
 			ip6tnl.EncapDport = ntohs(datum.Value[0:2])
+		case nl.IFLA_IPTUN_COLLECT_METADATA:
+			ip6tnl.FlowBased = true
 		}
 	}
 }
@@ -3082,6 +3367,9 @@ func addBridgeAttrs(bridge *Bridge, linkInfo *nl.RtAttr) {
 	if bridge.VlanFiltering != nil {
 		data.AddRtAttr(nl.IFLA_BR_VLAN_FILTERING, boolToByte(*bridge.VlanFiltering))
 	}
+	if bridge.VlanDefaultPVID != nil {
+		data.AddRtAttr(nl.IFLA_BR_VLAN_DEFAULT_PVID, nl.Uint16Attr(*bridge.VlanDefaultPVID))
+	}
 }
 
 func parseBridgeData(bridge Link, data []syscall.NetlinkRouteAttr) {
@@ -3100,6 +3388,9 @@ func parseBridgeData(bridge Link, data []syscall.NetlinkRouteAttr) {
 		case nl.IFLA_BR_VLAN_FILTERING:
 			vlanFiltering := datum.Value[0] == 1
 			br.VlanFiltering = &vlanFiltering
+		case nl.IFLA_BR_VLAN_DEFAULT_PVID:
+			vlanDefaultPVID := native.Uint16(datum.Value[0:2])
+			br.VlanDefaultPVID = &vlanDefaultPVID
 		}
 	}
 }
@@ -3141,12 +3432,17 @@ func parseVfInfoList(data []syscall.NetlinkRouteAttr) ([]VfInfo, error) {
 		if err != nil {
 			return nil, err
 		}
-		vfs = append(vfs, parseVfInfo(vfAttrs, i))
+
+		vf, err := parseVfInfo(vfAttrs, i)
+		if err != nil {
+			return nil, err
+		}
+		vfs = append(vfs, vf)
 	}
 	return vfs, nil
 }
 
-func parseVfInfo(data []syscall.NetlinkRouteAttr, id int) VfInfo {
+func parseVfInfo(data []syscall.NetlinkRouteAttr, id int) (VfInfo, error) {
 	vf := VfInfo{ID: id}
 	for _, element := range data {
 		switch element.Attr.Type {
@@ -3157,6 +3453,12 @@ func parseVfInfo(data []syscall.NetlinkRouteAttr, id int) VfInfo {
 			vl := nl.DeserializeVfVlan(element.Value[:])
 			vf.Vlan = int(vl.Vlan)
 			vf.Qos = int(vl.Qos)
+		case nl.IFLA_VF_VLAN_LIST:
+			vfVlanInfoList, err := nl.DeserializeVfVlanList(element.Value[:])
+			if err != nil {
+				return vf, err
+			}
+			vf.VlanProto = int(vfVlanInfoList[0].VlanProto)
 		case nl.IFLA_VF_TX_RATE:
 			txr := nl.DeserializeVfTxRate(element.Value[:])
 			vf.TxRate = int(txr.Rate)
@@ -3190,14 +3492,15 @@ func parseVfInfo(data []syscall.NetlinkRouteAttr, id int) VfInfo {
 			vf.Trust = result.Setting
 		}
 	}
-	return vf
+	return vf, nil
 }
 
 func addXfrmiAttrs(xfrmi *Xfrmi, linkInfo *nl.RtAttr) {
 	data := linkInfo.AddRtAttr(nl.IFLA_INFO_DATA, nil)
 	data.AddRtAttr(nl.IFLA_XFRM_LINK, nl.Uint32Attr(uint32(xfrmi.ParentIndex)))
-	data.AddRtAttr(nl.IFLA_XFRM_IF_ID, nl.Uint32Attr(xfrmi.Ifid))
-
+	if xfrmi.Ifid != 0 {
+		data.AddRtAttr(nl.IFLA_XFRM_IF_ID, nl.Uint32Attr(xfrmi.Ifid))
+	}
 }
 
 func parseXfrmiData(link Link, data []syscall.NetlinkRouteAttr) {
@@ -3399,4 +3702,33 @@ func addIPoIBAttrs(ipoib *IPoIB, linkInfo *nl.RtAttr) {
 	data.AddRtAttr(nl.IFLA_IPOIB_PKEY, nl.Uint16Attr(uint16(ipoib.Pkey)))
 	data.AddRtAttr(nl.IFLA_IPOIB_MODE, nl.Uint16Attr(uint16(ipoib.Mode)))
 	data.AddRtAttr(nl.IFLA_IPOIB_UMCAST, nl.Uint16Attr(uint16(ipoib.Umcast)))
+}
+
+func addBareUDPAttrs(bareudp *BareUDP, linkInfo *nl.RtAttr) {
+	data := linkInfo.AddRtAttr(nl.IFLA_INFO_DATA, nil)
+
+	data.AddRtAttr(nl.IFLA_BAREUDP_PORT, nl.Uint16Attr(nl.Swap16(bareudp.Port)))
+	data.AddRtAttr(nl.IFLA_BAREUDP_ETHERTYPE, nl.Uint16Attr(nl.Swap16(bareudp.EtherType)))
+	if bareudp.SrcPortMin != 0 {
+		data.AddRtAttr(nl.IFLA_BAREUDP_SRCPORT_MIN, nl.Uint16Attr(bareudp.SrcPortMin))
+	}
+	if bareudp.MultiProto {
+		data.AddRtAttr(nl.IFLA_BAREUDP_MULTIPROTO_MODE, []byte{})
+	}
+}
+
+func parseBareUDPData(link Link, data []syscall.NetlinkRouteAttr) {
+	bareudp := link.(*BareUDP)
+	for _, attr := range data {
+		switch attr.Attr.Type {
+		case nl.IFLA_BAREUDP_PORT:
+			bareudp.Port = binary.BigEndian.Uint16(attr.Value)
+		case nl.IFLA_BAREUDP_ETHERTYPE:
+			bareudp.EtherType = binary.BigEndian.Uint16(attr.Value)
+		case nl.IFLA_BAREUDP_SRCPORT_MIN:
+			bareudp.SrcPortMin = native.Uint16(attr.Value)
+		case nl.IFLA_BAREUDP_MULTIPROTO_MODE:
+			bareudp.MultiProto = true
+		}
+	}
 }
